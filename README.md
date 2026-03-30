@@ -6,7 +6,7 @@ Backend service for APSIT Student Sphere, a student collaboration and networking
 
 - **Framework**: Django 4.2.9 + Django REST Framework 3.14.0
 - **Database**: MySQL 5.7+ (configured for localhost:3306)
-- **Authentication**: JWT (PyJWT)
+- **API Authentication**: JWT (PyJWT)
 - **Documentation**: REST API endpoints (40+ endpoints)
 
 ## Quick Start
