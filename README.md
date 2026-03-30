@@ -1,6 +1,6 @@
-# Project Hub Backend
+# APSIT Student Sphere Backend
 
-A Django REST Framework API backend for the Student Hub platform. Manages projects, teams, users, events, and real-time notifications using polling.
+Backend service for APSIT Student Sphere, a student collaboration and networking platform where students can discover peers, build projects, form teams, join events, and receive notifications.
 
 ## Stack
 
