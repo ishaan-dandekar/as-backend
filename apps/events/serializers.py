@@ -1,0 +1,26 @@
+from rest_framework import serializers
+from .models import Event
+from django.contrib.auth import get_user_model
+from apps.users.models import get_user_profile_picture_url
+
+User = get_user_model()
+
+
+class EventOrganizerSerializer(serializers.ModelSerializer):
+    profile_picture_url = serializers.SerializerMethodField()
+
+    def get_profile_picture_url(self, obj):
+        return get_user_profile_picture_url(obj)
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'profile_picture_url']
+
+
+class EventSerializer(serializers.ModelSerializer):
+    organizer = EventOrganizerSerializer(read_only=True)
+
+    class Meta:
+        model = Event
+        fields = ['id', 'title', 'description', 'image_url', 'location', 'start_date', 'end_date',
+                  'organizer', 'status', 'attendee_count', 'capacity', 'tags', 'created_at', 'updated_at']
