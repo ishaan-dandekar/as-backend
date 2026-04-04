@@ -158,6 +158,14 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     'x-github-session',
 ]
 
+# Cache Configuration
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'apsit-student-sphere-cache',
+    }
+}
+
 # JWT Configuration
 JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'your-jwt-secret-key')
 JWT_ALGORITHM = os.getenv('JWT_ALGORITHM', 'HS256')

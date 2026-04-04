@@ -7,10 +7,11 @@ import requests
 from django.conf import settings
 from django.core.cache import cache
 from django.core import signing
-from urllib.parse import urlencode
+from django.db.models import Q
+from urllib.parse import urlencode, urlparse
 import uuid
 import json
-from .models import get_user_profile_picture_url, set_user_profile_picture_url
+from .models import get_user_profile_picture_url
 
 User = get_user_model()
 GITHUB_OAUTH_STATE_SALT = 'project-hub-github-oauth-state'
@@ -147,13 +148,30 @@ class UserProfileView(APIView):
         try:
             user = User.objects.get(id=request.user_id)
 
+            immutable_google_fields = []
+            if 'first_name' in request.data or 'name' in request.data:
+                immutable_google_fields.append('name')
+            if 'profile_picture_url' in request.data:
+                immutable_google_fields.append('profile_picture_url')
+            if 'location' in request.data:
+                immutable_google_fields.append('location')
+
+            if immutable_google_fields:
+                return Response(
+                    {
+                        'success': False,
+                        'message': (
+                            'The following fields are managed from your Google account and cannot be edited here: '
+                            + ', '.join(immutable_google_fields)
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             # Update allowed fields
-            for field in ['first_name', 'bio', 'github_url', 'linkedin_url', 'skills', 'interests', 'github_username', 'leetcode_username']:
+            for field in ['bio', 'github_url', 'linkedin_url', 'skills', 'interests', 'github_username', 'leetcode_username']:
                 if field in request.data and hasattr(user, field):
                     setattr(user, field, request.data[field])
-
-            if 'profile_picture_url' in request.data:
-                set_user_profile_picture_url(user, request.data.get('profile_picture_url'))
 
             if 'github_username' in request.data and not hasattr(user, 'github_username'):
                 user.last_name = request.data.get('github_username') or ''
@@ -188,6 +206,11 @@ class GitHubOAuthStartView(APIView):
         if not hasattr(request, 'user_id'):
             return Response({'success': False, 'message': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
 
+        frontend_origin = (request.query_params.get('frontend_origin') or '').strip().rstrip('/')
+        callback_origin = settings.FRONTEND_APP_URL.rstrip('/')
+        if frontend_origin and self._is_allowed_frontend_origin(frontend_origin):
+            callback_origin = frontend_origin
+
         missing = []
         if not settings.GITHUB_OAUTH_CLIENT_ID:
             missing.append('GITHUB_OAUTH_CLIENT_ID')
@@ -206,6 +229,7 @@ class GitHubOAuthStartView(APIView):
         state_payload = {
             'user_id': str(request.user_id),
             'nonce': uuid.uuid4().hex,
+            'frontend_origin': callback_origin,
         }
         signed_state = signing.dumps(state_payload, salt=GITHUB_OAUTH_STATE_SALT)
 
@@ -222,6 +246,18 @@ class GitHubOAuthStartView(APIView):
                 'authorizationUrl': f'https://github.com/login/oauth/authorize?{authorize_query}'
             }
         })
+
+    def _is_allowed_frontend_origin(self, origin: str) -> bool:
+        try:
+            parsed = urlparse(origin)
+            if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+                return False
+        except Exception:
+            return False
+
+        allowed_origins = {settings.FRONTEND_APP_URL.rstrip('/')}
+        allowed_origins.update(o.rstrip('/') for o in getattr(settings, 'CORS_ALLOWED_ORIGINS', []))
+        return origin in allowed_origins
 
 
 class GitHubOAuthCallbackView(APIView):
@@ -246,10 +282,14 @@ class GitHubOAuthCallbackView(APIView):
 
         try:
             payload = signing.loads(state, salt=GITHUB_OAUTH_STATE_SALT, max_age=600)
-        except signing.BadSignature:
-            return self._html_result('error', 'Invalid OAuth state', frontend_origin)
         except signing.SignatureExpired:
             return self._html_result('error', 'OAuth state expired. Please retry.', frontend_origin)
+        except signing.BadSignature:
+            return self._html_result('error', 'Invalid OAuth state', frontend_origin)
+
+        state_frontend_origin = (payload.get('frontend_origin') or '').strip().rstrip('/')
+        if state_frontend_origin and self._is_allowed_frontend_origin(state_frontend_origin):
+            frontend_origin = state_frontend_origin
 
         user_id = payload.get('user_id')
         if not user_id:
@@ -290,6 +330,7 @@ class GitHubOAuthCallbackView(APIView):
             headers=_github_headers(access_token),
             timeout=20,
         )
+
         if profile_resp.status_code != 200:
             return self._html_result('error', 'Unable to fetch GitHub profile', frontend_origin)
 
@@ -319,6 +360,18 @@ class GitHubOAuthCallbackView(APIView):
             'githubUsername': github_username,
         }
         return self._html_result('success', 'GitHub connected', frontend_origin, payload)
+
+    def _is_allowed_frontend_origin(self, origin: str) -> bool:
+        try:
+            parsed = urlparse(origin)
+            if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+                return False
+        except Exception:
+            return False
+
+        allowed_origins = {settings.FRONTEND_APP_URL.rstrip('/')}
+        allowed_origins.update(o.rstrip('/') for o in getattr(settings, 'CORS_ALLOWED_ORIGINS', []))
+        return origin in allowed_origins
 
     def _html_result(self, status_text, message, target_origin, payload=None):
         payload = payload or {}
@@ -380,56 +433,32 @@ class GitHubOAuthCallbackView(APIView):
         var message = {message_js};
         var targetOrigin = '{target_origin}';
 
-        console.log('[GitHub OAuth Callback] Message:', message);
-        console.log('[GitHub OAuth Callback] Target origin:', targetOrigin);
-        console.log('[GitHub OAuth Callback] Window opener exists:', !!window.opener);
-        console.log('[GitHub OAuth Callback] Window opener closed:', window.opener?.closed);
+                if (window.opener && !window.opener.closed) {{
+                    try {{
+                        window.opener.postMessage(message, targetOrigin);
+                    }} catch (e) {{}}
+                }}
 
-        // Strategy 1: postMessage to opener
-        var sent = false;
-        if (window.opener && !window.opener.closed) {{
-          try {{
-            console.log('[GitHub OAuth Callback] Sending postMessage to opener...');
-            window.opener.postMessage(message, targetOrigin);
-            sent = true;
-            console.log('[GitHub OAuth Callback] postMessage sent successfully');
-          }} catch (e) {{
-            console.error('[GitHub OAuth Callback] postMessage error:', e.message);
-          }}
-        }} else {{
-          console.warn('[GitHub OAuth Callback] Cannot send postMessage: opener not available');
-        }}
+                // Deterministic handoff: always redirect popup to frontend origin with OAuth params.
+                // The frontend settings page will persist session, notify opener, and close the popup.
+                try {{
+                    var params = new URLSearchParams();
+                    params.set('github_oauth', message.status || 'error');
+                    params.set('github_message', message.message || '');
 
-        // Strategy 2: Write result to localStorage so the opener picks it up
-        // via its 'storage' event listener (works even if opener ref is lost)
-        try {{
-          if (message.status === 'success' && message.payload && message.payload.sessionId) {{
-            console.log('[GitHub OAuth Callback] Writing to localStorage...');
-            localStorage.setItem('github_oauth_session', JSON.stringify({{
-              sessionId: message.payload.sessionId,
-              githubUsername: message.payload.githubUsername
-            }}));
-            console.log('[GitHub OAuth Callback] localStorage write complete');
-          }}
-        }} catch (e) {{
-          console.error('[GitHub OAuth Callback] localStorage error:', e.message);
-        }}
+                    if (message.status === 'success' && message.payload) {{
+                        if (message.payload.sessionId) params.set('session_id', message.payload.sessionId);
+                        if (message.payload.githubUsername) params.set('github_username', message.payload.githubUsername);
+                    }}
 
-        // Try to close the popup aggressively
-        function tryClose() {{
-          try {{ window.close(); }} catch(e) {{}}
-        }}
+                    var nextUrl = targetOrigin + '/settings?' + params.toString();
+                    window.location.replace(nextUrl);
+                    return;
+                }} catch (e) {{}}
 
-        tryClose();
-        setTimeout(tryClose, 300);
-        setTimeout(tryClose, 800);
-        setTimeout(tryClose, 1500);
-
-        // After 2s, if still open, show a manual close link
-        setTimeout(function() {{
-          var fb = document.getElementById('fallback');
-          if (fb) fb.style.display = 'block';
-        }}, 2000);
+                // If redirect fails, keep popup open with manual close fallback.
+                var fb = document.getElementById('fallback');
+                if (fb) fb.style.display = 'block';
       }})();
     </script>
   </body>
@@ -445,6 +474,7 @@ class GitHubAuthorizedStatsView(APIView):
             return Response({'success': False, 'message': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
 
         session_id = request.headers.get('X-GitHub-Session') or request.query_params.get('session_id')
+
         if not session_id:
             return Response({'success': False, 'message': 'Missing GitHub session id'}, status=status.HTTP_400_BAD_REQUEST)
 

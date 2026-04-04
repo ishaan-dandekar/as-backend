@@ -4,16 +4,21 @@ from rest_framework import status
 from django.contrib.auth import get_user_model
 from django.http import HttpResponse, HttpResponseRedirect
 from django.conf import settings
+from django.core import signing
 from apps.core.authentication import generate_tokens
 from apps.users.models import get_user_profile_picture_url, set_user_profile_picture_url
 from urllib.parse import urlencode
+from urllib.parse import urlparse
 import requests
 import json
 import jwt
+import secrets
 
 User = get_user_model()
 
 ALLOWED_EMAIL_DOMAIN = 'apsit.edu.in'
+STATE_SALT = 'google-oauth-state'
+STATE_MAX_AGE_SECONDS = 600
 
 
 class GoogleOAuthStartView(APIView):
@@ -28,7 +33,12 @@ class GoogleOAuthStartView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        params = urlencode({
+        frontend_origin = (request.query_params.get('frontend_origin') or '').strip().rstrip('/')
+        callback_origin = settings.FRONTEND_APP_URL.rstrip('/')
+        if frontend_origin and self._is_allowed_frontend_origin(frontend_origin):
+            callback_origin = frontend_origin
+
+        oauth_params = {
             'client_id': settings.GOOGLE_OAUTH_CLIENT_ID,
             'redirect_uri': settings.GOOGLE_OAUTH_REDIRECT_URI,
             'response_type': 'code',
@@ -36,7 +46,10 @@ class GoogleOAuthStartView(APIView):
             'access_type': 'offline',
             'prompt': 'select_account',
             'hd': ALLOWED_EMAIL_DOMAIN,  # hints Google to show only APSIT accounts
-        })
+            'state': self._build_signed_state(callback_origin),
+        }
+
+        params = urlencode(oauth_params)
 
         return Response({
             'success': True,
@@ -44,6 +57,39 @@ class GoogleOAuthStartView(APIView):
                 'authorizationUrl': f'https://accounts.google.com/o/oauth2/v2/auth?{params}',
             },
         })
+
+    def _is_allowed_frontend_origin(self, origin: str) -> bool:
+        try:
+            parsed = urlparse(origin)
+            if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+                return False
+        except Exception:
+            return False
+
+        allowed_origins = {settings.FRONTEND_APP_URL.rstrip('/')}
+        allowed_origins.update(o.rstrip('/') for o in getattr(settings, 'CORS_ALLOWED_ORIGINS', []))
+        return origin in allowed_origins
+
+    def _build_signed_state(self, frontend_origin: str) -> str:
+        payload = {
+            'origin': frontend_origin,
+            'nonce': secrets.token_urlsafe(16),
+        }
+        return signing.dumps(payload, salt=STATE_SALT)
+
+    def _get_origin_from_signed_state(self, signed_state: str):
+        try:
+            payload = signing.loads(signed_state, salt=STATE_SALT, max_age=STATE_MAX_AGE_SECONDS)
+        except signing.SignatureExpired:
+            return None
+        except signing.BadSignature:
+            return None
+
+        origin = (payload.get('origin') or '').strip().rstrip('/')
+        if not origin or not self._is_allowed_frontend_origin(origin):
+            return None
+
+        return origin
 
 
 class GoogleOAuthCallbackView(APIView):
@@ -56,6 +102,16 @@ class GoogleOAuthCallbackView(APIView):
         code = request.query_params.get('code')
         error = request.query_params.get('error')
         frontend_origin = settings.FRONTEND_APP_URL.rstrip('/')
+        signed_state = (request.query_params.get('state') or '').strip()
+
+        if not signed_state:
+            return self._redirect_result('error', 'Missing sign-in state. Please try again.', frontend_origin)
+
+        state_origin = self._get_origin_from_signed_state(signed_state)
+        if not state_origin:
+            return self._redirect_result('error', 'Invalid or expired sign-in state. Please try again.', frontend_origin)
+
+        frontend_origin = state_origin
 
         if error:
             return self._redirect_result('error', f'Google sign-in was cancelled or failed: {error}', frontend_origin)
@@ -103,6 +159,10 @@ class GoogleOAuthCallbackView(APIView):
         email = (profile.get('email') or '').strip().lower()
         name = (profile.get('name') or '').strip()
         picture = profile.get('picture', '')
+        email_verified = bool(profile.get('verified_email'))
+
+        if not email_verified:
+            return self._redirect_result('error', 'Google account email is not verified.', frontend_origin)
 
         # Validate APSIT email domain
         if not email.endswith(f'@{ALLOWED_EMAIL_DOMAIN}'):
@@ -158,6 +218,32 @@ class GoogleOAuthCallbackView(APIView):
         }
 
         return self._redirect_result('success', 'Signed in successfully!', frontend_origin, payload)
+
+    def _is_allowed_frontend_origin(self, origin: str) -> bool:
+        try:
+            parsed = urlparse(origin)
+            if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+                return False
+        except Exception:
+            return False
+
+        allowed_origins = {settings.FRONTEND_APP_URL.rstrip('/')}
+        allowed_origins.update(o.rstrip('/') for o in getattr(settings, 'CORS_ALLOWED_ORIGINS', []))
+        return origin in allowed_origins
+
+    def _get_origin_from_signed_state(self, signed_state: str):
+        try:
+            payload = signing.loads(signed_state, salt=STATE_SALT, max_age=STATE_MAX_AGE_SECONDS)
+        except signing.SignatureExpired:
+            return None
+        except signing.BadSignature:
+            return None
+
+        origin = (payload.get('origin') or '').strip().rstrip('/')
+        if not origin or not self._is_allowed_frontend_origin(origin):
+            return None
+
+        return origin
 
     def _redirect_result(self, status_text, message, target_origin, payload=None):
         """Redirect the popup to a frontend callback page with the result encoded in the URL."""
