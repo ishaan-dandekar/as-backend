@@ -97,6 +97,8 @@ def _delete_cached_session(session_id):
 
 
 def _safe_user_payload(user):
+    moodle_id = _derive_moodle_id(user)
+
     teams_joined_value = getattr(user, 'teams_joined', 0)
     if hasattr(teams_joined_value, 'count'):
         try:
@@ -110,6 +112,8 @@ def _safe_user_payload(user):
 
     return {
         'id': str(user.id),
+        'moodle_id': moodle_id,
+        'unique_id': moodle_id,
         'username': user.username,
         'email': user.email,
         'name': getattr(user, 'first_name', '') or user.username,
@@ -123,6 +127,40 @@ def _safe_user_payload(user):
         'projects_completed': getattr(user, 'projects_completed', 0),
         'teams_joined': teams_joined_value,
     }
+
+
+def _derive_moodle_id(user):
+    username = (getattr(user, 'username', '') or '').strip()
+    email = (getattr(user, 'email', '') or '').strip().lower()
+
+    if username.isdigit():
+        return username
+
+    local_part = email.split('@')[0] if '@' in email else ''
+    if local_part.isdigit():
+        return local_part
+
+    return username or str(user.id)
+
+
+def _resolve_user_by_identifier(identifier: str):
+    identifier = (identifier or '').strip()
+    if not identifier:
+        return None
+
+    # Preferred: direct UUID match
+    user = User.objects.filter(id=identifier).first()
+    if user:
+        return user
+
+    # Fallback: username match (often moodle ID)
+    user = User.objects.filter(username__iexact=identifier).first()
+    if user:
+        return user
+
+    # Fallback: APSIT email local-part moodle ID, e.g. 12345@apsit.edu.in
+    user = User.objects.filter(email__istartswith=f'{identifier}@').first()
+    return user
 
 
 class UserProfileView(APIView):
@@ -190,15 +228,15 @@ class UserDetailView(APIView):
     permission_classes = []
 
     def get(self, request, user_id):
-        """Get user by ID"""
-        try:
-            user = User.objects.get(id=user_id)
-            return Response({
-                'success': True,
-                'data': _safe_user_payload(user)
-            })
-        except User.DoesNotExist:
+        """Get user by UUID or Moodle ID."""
+        user = _resolve_user_by_identifier(user_id)
+        if not user:
             return Response({'success': False, 'message': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({
+            'success': True,
+            'data': _safe_user_payload(user)
+        })
 
 
 class GitHubOAuthStartView(APIView):
@@ -623,6 +661,8 @@ class UserSearchView(APIView):
             'success': True,
             'data': [{
                 'id': str(user.id),
+                'moodle_id': _derive_moodle_id(user),
+                'unique_id': _derive_moodle_id(user),
                 'username': user.username,
                 'email': user.email,
                 'first_name': user.first_name,

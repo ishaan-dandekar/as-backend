@@ -8,13 +8,27 @@ User = get_user_model()
 
 class TeamMemberSerializer(serializers.ModelSerializer):
     profile_picture_url = serializers.SerializerMethodField()
+    moodle_id = serializers.SerializerMethodField()
 
     def get_profile_picture_url(self, obj):
         return get_user_profile_picture_url(obj)
 
+    def get_moodle_id(self, obj):
+        username = (obj.username or '').strip()
+        email = (obj.email or '').strip().lower()
+
+        if username.isdigit():
+            return username
+
+        local_part = email.split('@')[0] if '@' in email else ''
+        if local_part.isdigit():
+            return local_part
+
+        return username or str(obj.id)
+
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'profile_picture_url']
+        fields = ['id', 'moodle_id', 'username', 'email', 'profile_picture_url']
 
 
 class TeamSerializer(serializers.ModelSerializer):

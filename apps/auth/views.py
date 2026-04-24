@@ -66,6 +66,9 @@ class GoogleOAuthStartView(APIView):
         except Exception:
             return False
 
+        if getattr(settings, 'CORS_ALLOW_ALL_ORIGINS', False):
+            return True
+
         allowed_origins = {settings.FRONTEND_APP_URL.rstrip('/')}
         allowed_origins.update(o.rstrip('/') for o in getattr(settings, 'CORS_ALLOWED_ORIGINS', []))
         return origin in allowed_origins
@@ -226,6 +229,9 @@ class GoogleOAuthCallbackView(APIView):
                 return False
         except Exception:
             return False
+
+        if getattr(settings, 'CORS_ALLOW_ALL_ORIGINS', False):
+            return True
 
         allowed_origins = {settings.FRONTEND_APP_URL.rstrip('/')}
         allowed_origins.update(o.rstrip('/') for o in getattr(settings, 'CORS_ALLOWED_ORIGINS', []))

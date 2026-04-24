@@ -6,6 +6,7 @@ from .models import Project
 from .serializers import ProjectSerializer
 from django.db.models import Q
 from apps.notifications.models import Notification
+from apps.teams.models import Team
 
 User = get_user_model()
 
@@ -274,6 +275,45 @@ class ProjectJoinRequestRespondView(APIView):
         requester_id = metadata.get('requester_id')
         project_id = metadata.get('project_id') or notification.related_id
         project_title = metadata.get('project_title') or 'project'
+
+        requester = User.objects.filter(id=requester_id).first() if requester_id else None
+        project = Project.objects.filter(id=project_id).first() if project_id else None
+
+        if action == 'ACCEPT':
+            if not requester:
+                return Response({'success': False, 'message': 'Requester not found'}, status=status.HTTP_404_NOT_FOUND)
+
+            if not project:
+                return Response({'success': False, 'message': 'Project not found'}, status=status.HTTP_404_NOT_FOUND)
+
+            team = project.team
+            if not team:
+                team_capacity = project.team_capacity if (project.team_capacity or 0) > 0 else 5
+                team = Team.objects.create(
+                    name=f"{project.title} Team",
+                    description=f"Team for {project.title}",
+                    owner=project.owner,
+                    capacity=team_capacity,
+                    member_count=1,
+                )
+                team.members.add(project.owner)
+                team.member_roles[str(project.owner.id)] = 'OWNER'
+                team.save(update_fields=['member_roles'])
+                project.team = team
+
+            if not team.members.filter(id=requester.id).exists():
+                if team.member_count >= team.capacity:
+                    return Response({'success': False, 'message': 'Team is full'}, status=status.HTTP_400_BAD_REQUEST)
+
+                team.members.add(requester)
+                team.member_roles[str(requester.id)] = 'MEMBER'
+                team.member_count = team.members.count()
+                team.save(update_fields=['member_roles', 'member_count', 'updated_at'])
+
+            project.team_member_count = team.member_count
+            if (project.team_capacity or 0) <= 0:
+                project.team_capacity = team.capacity
+            project.save(update_fields=['team', 'team_member_count', 'team_capacity', 'updated_at'])
 
         metadata['status'] = 'ACCEPTED' if action == 'ACCEPT' else 'REJECTED'
         notification.metadata = metadata
