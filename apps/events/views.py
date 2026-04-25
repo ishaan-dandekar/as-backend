@@ -8,6 +8,25 @@ from .serializers import EventSerializer
 User = get_user_model()
 
 
+def _get_authenticated_user(request):
+    if not hasattr(request, 'user_id'):
+        return None, Response({'success': False, 'message': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        return User.objects.get(id=request.user_id), None
+    except User.DoesNotExist:
+        return None, Response({'success': False, 'message': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+def _ensure_department_user(user):
+    if getattr(user, 'role', '').upper() not in {'DEPARTMENT', 'ADMIN'}:
+        return Response(
+            {'success': False, 'message': 'Only department users can manage events'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
 class EventCreateListView(APIView):
     def get(self, request):
         """List all events with optional filtering"""
@@ -25,7 +44,7 @@ class EventCreateListView(APIView):
         end = start + limit
         events = events[start:end]
 
-        serializer = EventSerializer(events, many=True)
+        serializer = EventSerializer(events, many=True, context={'request': request})
         return Response({
             'success': True,
             'data': serializer.data,
@@ -39,19 +58,22 @@ class EventCreateListView(APIView):
 
     def post(self, request):
         """Create a new event (authenticated)"""
-        if not hasattr(request, 'user_id'):
-            return Response({'success': False, 'message': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        user, error_response = _get_authenticated_user(request)
+        if error_response:
+            return error_response
 
-        try:
-            user = User.objects.get(id=request.user_id)
-            serializer = EventSerializer(data=request.data)
+        role_error = _ensure_department_user(user)
+        if role_error:
+            return role_error
 
-            if serializer.is_valid():
-                event = serializer.save(organizer=user, attendees=[str(user.id)], attendee_count=1)
-                return Response({'success': True, 'data': EventSerializer(event).data}, status=status.HTTP_201_CREATED)
-            return Response({'success': False, 'message': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
-        except User.DoesNotExist:
-            return Response({'success': False, 'message': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = EventSerializer(data=request.data)
+        if serializer.is_valid():
+            event = serializer.save(organizer=user, attendees=[str(user.id)], attendee_count=1)
+            return Response(
+                {'success': True, 'data': EventSerializer(event, context={'request': request}).data},
+                status=status.HTTP_201_CREATED,
+            )
+        return Response({'success': False, 'message': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class EventDetailView(APIView):
@@ -59,36 +81,46 @@ class EventDetailView(APIView):
         """Get event details"""
         try:
             event = Event.objects.get(id=event_id)
-            return Response({'success': True, 'data': EventSerializer(event).data})
+            return Response({'success': True, 'data': EventSerializer(event, context={'request': request}).data})
         except Event.DoesNotExist:
             return Response({'success': False, 'message': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
 
     def patch(self, request, event_id):
         """Update event (organizer only)"""
-        if not hasattr(request, 'user_id'):
-            return Response({'success': False, 'message': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        user, error_response = _get_authenticated_user(request)
+        if error_response:
+            return error_response
+
+        role_error = _ensure_department_user(user)
+        if role_error:
+            return role_error
 
         try:
             event = Event.objects.get(id=event_id)
-            if str(event.organizer.id) != str(request.user_id):
+            if str(event.organizer.id) != str(user.id):
                 return Response({'success': False, 'message': 'Only organizer can update'}, status=status.HTTP_403_FORBIDDEN)
 
             serializer = EventSerializer(event, data=request.data, partial=True)
             if serializer.is_valid():
                 event = serializer.save()
-                return Response({'success': True, 'data': EventSerializer(event).data})
+                return Response({'success': True, 'data': EventSerializer(event, context={'request': request}).data})
             return Response({'success': False, 'message': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
         except Event.DoesNotExist:
             return Response({'success': False, 'message': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
 
     def delete(self, request, event_id):
         """Delete event (organizer only)"""
-        if not hasattr(request, 'user_id'):
-            return Response({'success': False, 'message': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+        user, error_response = _get_authenticated_user(request)
+        if error_response:
+            return error_response
+
+        role_error = _ensure_department_user(user)
+        if role_error:
+            return role_error
 
         try:
             event = Event.objects.get(id=event_id)
-            if str(event.organizer.id) != str(request.user_id):
+            if str(event.organizer.id) != str(user.id):
                 return Response({'success': False, 'message': 'Only organizer can delete'}, status=status.HTTP_403_FORBIDDEN)
 
             event.delete()
@@ -117,7 +149,7 @@ class EventRegisterView(APIView):
             event.attendee_count += 1
             event.save()
 
-            return Response({'success': True, 'data': EventSerializer(event).data})
+            return Response({'success': True, 'data': EventSerializer(event, context={'request': request}).data})
         except Event.DoesNotExist:
             return Response({'success': False, 'message': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -139,6 +171,6 @@ class EventUnregisterView(APIView):
             event.attendee_count -= 1
             event.save()
 
-            return Response({'success': True, 'data': EventSerializer(event).data})
+            return Response({'success': True, 'data': EventSerializer(event, context={'request': request}).data})
         except Event.DoesNotExist:
             return Response({'success': False, 'message': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)

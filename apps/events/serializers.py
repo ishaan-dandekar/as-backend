@@ -19,8 +19,35 @@ class EventOrganizerSerializer(serializers.ModelSerializer):
 
 class EventSerializer(serializers.ModelSerializer):
     organizer = EventOrganizerSerializer(read_only=True)
+    organizer_id = serializers.UUIDField(source='organizer.id', read_only=True)
+    type = serializers.SerializerMethodField()
+    is_registered = serializers.SerializerMethodField()
 
     class Meta:
         model = Event
         fields = ['id', 'title', 'description', 'image_url', 'location', 'start_date', 'end_date',
-                  'organizer', 'status', 'attendee_count', 'capacity', 'tags', 'created_at', 'updated_at']
+                  'organizer', 'organizer_id', 'status', 'attendee_count', 'capacity', 'tags', 'type',
+                  'is_registered', 'created_at', 'updated_at']
+
+    def get_type(self, obj):
+        joined_text = ' '.join(
+            [
+                str(obj.title or ''),
+                str(obj.description or ''),
+                ' '.join(str(tag or '') for tag in (obj.tags or [])),
+            ]
+        ).lower()
+
+        if 'hackathon' in joined_text:
+            return 'HACKATHON'
+        if 'workshop' in joined_text:
+            return 'WORKSHOP'
+        if 'meetup' in joined_text or 'orientation' in joined_text or 'seminar' in joined_text:
+            return 'MEETUP'
+        return 'OTHER'
+
+    def get_is_registered(self, obj):
+        request = self.context.get('request')
+        if not request or not hasattr(request, 'user_id'):
+            return False
+        return str(request.user_id) in (obj.attendees or [])

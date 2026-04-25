@@ -17,7 +17,7 @@ except ImportError:
     pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / '.env', override=True)
+load_dotenv(BASE_DIR / '.env', override=False)
 
 SECRET_KEY = os.getenv('SECRET_KEY', 'your-secret-key-change-in-production')
 
@@ -200,7 +200,7 @@ GOOGLE_OAUTH_CLIENT_SECRET = os.getenv('GOOGLE_OAUTH_CLIENT_SECRET', '')
 GOOGLE_OAUTH_REDIRECT_URI = os.getenv('GOOGLE_OAUTH_REDIRECT_URI', 'http://localhost:8000/api/auth/google/callback')
 
 # Custom User Model
-AUTH_USER_MODEL = 'auth.User'
+AUTH_USER_MODEL = 'core.User'
 
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = 'static/'
