@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model
 from django.db.utils import OperationalError, ProgrammingError
 from .models import Team, JoinRequest
 from .serializers import TeamSerializer, JoinRequestSerializer, TeamMemberSerializer
+from apps.core.discovery import extract_team_search_keywords
 
 User = get_user_model()
 
@@ -16,7 +17,15 @@ class TeamCreateView(APIView):
             return Response({'success': False, 'message': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
 
         try:
+            search_query = (request.query_params.get('q') or '').strip().lower()
             teams = Team.objects.filter(members__id=request.user_id, is_active=True).distinct()
+            if search_query:
+                teams = [
+                    team for team in teams
+                    if search_query in ' '.join(extract_team_search_keywords(team.name, team.description))
+                    or search_query in str(team.description or '').lower()
+                    or search_query in str(team.name or '').lower()
+                ]
             serializer = TeamSerializer(teams, many=True)
             return Response({'success': True, 'data': serializer.data})
         except (OperationalError, ProgrammingError):
@@ -53,7 +62,15 @@ class TeamDiscoverView(APIView):
             return Response({'success': False, 'message': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
 
         try:
+            search_query = (request.query_params.get('q') or '').strip().lower()
             teams = Team.objects.filter(is_active=True).exclude(members__id=request.user_id).distinct()
+            if search_query:
+                teams = [
+                    team for team in teams
+                    if search_query in ' '.join(extract_team_search_keywords(team.name, team.description))
+                    or search_query in str(team.description or '').lower()
+                    or search_query in str(team.name or '').lower()
+                ]
             serializer = TeamSerializer(teams, many=True)
             return Response({'success': True, 'data': serializer.data})
         except (OperationalError, ProgrammingError):
@@ -101,6 +118,35 @@ class TeamDetailView(APIView):
             return Response({'success': True, 'message': 'Team deleted successfully'})
         except Team.DoesNotExist:
             return Response({'success': False, 'message': 'Team not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class TeamMemberRemoveView(APIView):
+    def delete(self, request, team_id, user_id):
+        """Remove a member from the team (owner only)."""
+        if not hasattr(request, 'user_id'):
+            return Response({'success': False, 'message': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        try:
+            team = Team.objects.get(id=team_id)
+        except Team.DoesNotExist:
+            return Response({'success': False, 'message': 'Team not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if str(team.owner.id) != str(request.user_id):
+            return Response({'success': False, 'message': 'Only owner can remove members'}, status=status.HTTP_403_FORBIDDEN)
+
+        if str(team.owner.id) == str(user_id):
+            return Response({'success': False, 'message': 'Team leader cannot be removed'}, status=status.HTTP_400_BAD_REQUEST)
+
+        member = User.objects.filter(id=user_id).first()
+        if not member or not team.members.filter(id=user_id).exists():
+            return Response({'success': False, 'message': 'Member not found on this team'}, status=status.HTTP_404_NOT_FOUND)
+
+        team.members.remove(member)
+        team.member_roles.pop(str(user_id), None)
+        team.member_count = team.members.count()
+        team.save(update_fields=['member_roles', 'member_count', 'updated_at'])
+
+        return Response({'success': True, 'message': 'Member removed successfully'})
 
 
 class TeamJoinView(APIView):

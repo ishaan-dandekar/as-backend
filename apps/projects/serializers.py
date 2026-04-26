@@ -2,6 +2,7 @@ from rest_framework import serializers
 from .models import Project
 from django.contrib.auth import get_user_model
 from apps.users.models import get_user_profile_picture_url
+from apps.core.discovery import infer_project_domains
 
 User = get_user_model()
 
@@ -20,10 +21,11 @@ class ProjectOwnerSerializer(serializers.ModelSerializer):
 class ProjectSerializer(serializers.ModelSerializer):
     owner = ProjectOwnerSerializer(read_only=True)
     is_bookmarked = serializers.SerializerMethodField()
+    domain_tags = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
-        fields = ['id', 'title', 'description', 'thumbnail_url', 'images', 'tech_stack', 'owner',
+        fields = ['id', 'title', 'description', 'thumbnail_url', 'images', 'tech_stack', 'domain_tags', 'owner',
                   'status', 'team', 'team_member_count', 'team_capacity', 'github_url', 'live_url',
                   'is_bookmarked', 'created_at', 'updated_at']
 
@@ -32,3 +34,6 @@ class ProjectSerializer(serializers.ModelSerializer):
         if request and hasattr(request, 'user_id'):
             return str(request.user_id) in obj.bookmarked_by
         return False
+
+    def get_domain_tags(self, obj):
+        return infer_project_domains(obj.title, obj.description, obj.tech_stack)

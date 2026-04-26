@@ -19,7 +19,7 @@ class EventOrganizerSerializer(serializers.ModelSerializer):
 
 class EventSerializer(serializers.ModelSerializer):
     organizer = EventOrganizerSerializer(read_only=True)
-    organizer_id = serializers.UUIDField(source='organizer.id', read_only=True)
+    organizer_id = serializers.CharField(source='organizer.id', read_only=True)
     type = serializers.SerializerMethodField()
     is_registered = serializers.SerializerMethodField()
 

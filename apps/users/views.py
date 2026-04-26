@@ -12,11 +12,21 @@ from urllib.parse import urlencode, urlparse
 import uuid
 import json
 from .models import get_user_profile_picture_url
+from apps.core.discovery import normalize_skill_tag, normalize_tags
 
 User = get_user_model()
 GITHUB_OAUTH_STATE_SALT = 'project-hub-github-oauth-state'
 GITHUB_OAUTH_SESSION_PREFIX = 'github_oauth_session:'
 GITHUB_OAUTH_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
+VALID_BRANCHES = {choice[0] for choice in getattr(User, 'BRANCH_CHOICES', [])}
+VALID_YEARS = {choice[0] for choice in getattr(User, 'YEAR_CHOICES', [])}
+
+
+def _normalized_user_role(user):
+    role = (getattr(user, 'role', '') or '').upper()
+    if role in {'DEPARTMENT', 'ADMIN'}:
+        return 'DEPARTMENT'
+    return 'STUDENT'
 
 
 def _build_github_stats_payload(profile_data, repos_data):
@@ -97,18 +107,22 @@ def _delete_cached_session(session_id):
 
 
 def _safe_user_payload(user):
-    moodle_id = _derive_moodle_id(user)
+    moodle_id = str(user.id)
 
-    teams_joined_value = getattr(user, 'teams_joined', 0)
+    teams_joined_value = getattr(user, 'teams_joined', None)
     if hasattr(teams_joined_value, 'count'):
         try:
             teams_joined_value = teams_joined_value.count()
         except Exception:
             teams_joined_value = 0
+    elif teams_joined_value is None:
+        teams_joined_value = getattr(user, 'teams_joined_count', 0)
 
     github_username_value = getattr(user, 'github_username', None)
     if github_username_value is None:
         github_username_value = getattr(user, 'last_name', None) or None
+
+    skill_tags = normalize_tags(getattr(user, 'skills', []))
 
     return {
         'id': str(user.id),
@@ -116,12 +130,16 @@ def _safe_user_payload(user):
         'unique_id': moodle_id,
         'username': user.username,
         'email': user.email,
+        'role': _normalized_user_role(user),
         'name': getattr(user, 'first_name', '') or user.username,
         'profile_picture_url': get_user_profile_picture_url(user),
         'bio': getattr(user, 'bio', ''),
+        'branch': getattr(user, 'branch', None),
+        'year': getattr(user, 'year', None),
         'github_username': github_username_value,
         'leetcode_username': getattr(user, 'leetcode_username', None),
-        'skills': getattr(user, 'skills', []),
+        'skills': skill_tags,
+        'skill_tags': skill_tags,
         'interests': getattr(user, 'interests', []),
         'projects_created': getattr(user, 'projects_created', 0),
         'projects_completed': getattr(user, 'projects_completed', 0),
@@ -130,17 +148,7 @@ def _safe_user_payload(user):
 
 
 def _derive_moodle_id(user):
-    username = (getattr(user, 'username', '') or '').strip()
-    email = (getattr(user, 'email', '') or '').strip().lower()
-
-    if username.isdigit():
-        return username
-
-    local_part = email.split('@')[0] if '@' in email else ''
-    if local_part.isdigit():
-        return local_part
-
-    return username or str(user.id)
+    return str(user.id)
 
 
 def _resolve_user_by_identifier(identifier: str):
@@ -148,7 +156,7 @@ def _resolve_user_by_identifier(identifier: str):
     if not identifier:
         return None
 
-    # Preferred: direct UUID match
+    # Preferred: direct primary key match (Moodle ID)
     user = User.objects.filter(id=identifier).first()
     if user:
         return user
@@ -206,10 +214,53 @@ class UserProfileView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            branch = request.data.get('branch') if 'branch' in request.data else None
+            year = request.data.get('year') if 'year' in request.data else None
+
+            if _normalized_user_role(user) != 'STUDENT':
+                if 'branch' in request.data or 'year' in request.data:
+                    return Response(
+                        {
+                            'success': False,
+                            'message': 'Only student profiles can set branch and year.',
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            else:
+                if 'branch' in request.data:
+                    normalized_branch = str(branch or '').strip()
+                    if normalized_branch and normalized_branch not in VALID_BRANCHES:
+                        return Response(
+                            {
+                                'success': False,
+                                'message': f"branch must be one of: {', '.join(sorted(VALID_BRANCHES))}",
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    user.branch = normalized_branch or None
+
+                if 'year' in request.data:
+                    normalized_year = str(year or '').strip().upper()
+                    if normalized_year and normalized_year not in VALID_YEARS:
+                        return Response(
+                            {
+                                'success': False,
+                                'message': f"year must be one of: {', '.join(sorted(VALID_YEARS))}",
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    user.year = normalized_year or None
+
             # Update allowed fields
-            for field in ['bio', 'github_url', 'linkedin_url', 'skills', 'interests', 'github_username', 'leetcode_username']:
+            for field in ['bio', 'github_url', 'linkedin_url', 'interests', 'github_username', 'leetcode_username']:
                 if field in request.data and hasattr(user, field):
                     setattr(user, field, request.data[field])
+
+            if 'skills' in request.data and hasattr(user, 'skills'):
+                raw_skills = request.data.get('skills') or []
+                if not isinstance(raw_skills, list):
+                    raw_skills = [raw_skills]
+                user.skills = normalize_tags(raw_skills)
 
             if 'github_username' in request.data and not hasattr(user, 'github_username'):
                 user.last_name = request.data.get('github_username') or ''
@@ -228,7 +279,7 @@ class UserDetailView(APIView):
     permission_classes = []
 
     def get(self, request, user_id):
-        """Get user by UUID or Moodle ID."""
+        """Get user by primary ID (Moodle ID) or fallback identifiers."""
         user = _resolve_user_by_identifier(user_id)
         if not user:
             return Response({'success': False, 'message': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -639,6 +690,14 @@ class UserSearchView(APIView):
     def get(self, request):
         """Search users"""
         query = (request.query_params.get('q') or '').strip()
+        normalized_query = query.lower()
+        skills = request.query_params.getlist('skills')
+        if not skills:
+            skills = [
+                item.strip()
+                for item in str(request.query_params.get('skills', '')).split(',')
+                if item.strip()
+            ]
 
         try:
             limit = int(request.query_params.get('limit', 25))
@@ -654,9 +713,40 @@ class UserSearchView(APIView):
                 | Q(email__icontains=query)
                 | Q(first_name__icontains=query)
                 | Q(last_name__icontains=query)
+                | Q(branch__icontains=query)
+                | Q(year__icontains=query)
+                | Q(github_username__icontains=query)
+                | Q(leetcode_username__icontains=query)
             )
 
-        users = users.order_by('first_name', 'username')[:limit]
+        users = list(users.order_by('first_name', 'username'))
+        normalized_skills = {normalize_skill_tag(skill).lower() for skill in skills if normalize_skill_tag(skill)}
+
+        if normalized_skills:
+            users = [
+                user for user in users
+                if normalized_skills.issubset({
+                    normalized_skill.lower()
+                    for normalized_skill in normalize_tags(getattr(user, 'skills', []))
+                })
+            ]
+
+        if query:
+            users = [
+                user for user in users
+                if normalized_query in _derive_moodle_id(user).lower()
+                or normalized_query in f"{(user.first_name or '').strip()} {(user.last_name or '').strip()}".lower()
+                or normalized_query in (user.username or '').lower()
+                or normalized_query in (user.email or '').lower()
+                or normalized_query in (getattr(user, 'github_username', '') or '').lower()
+                or normalized_query in (getattr(user, 'leetcode_username', '') or '').lower()
+                or any(
+                    normalized_query in skill.lower()
+                    for skill in normalize_tags(getattr(user, 'skills', []))
+                )
+            ]
+
+        users = users[:limit]
         return Response({
             'success': True,
             'data': [{
@@ -668,6 +758,10 @@ class UserSearchView(APIView):
                 'first_name': user.first_name,
                 'last_name': user.last_name,
                 'profile_picture_url': get_user_profile_picture_url(user),
+                'branch': getattr(user, 'branch', None),
+                'year': getattr(user, 'year', None),
+                'skills': normalize_tags(getattr(user, 'skills', [])),
+                'skill_tags': normalize_tags(getattr(user, 'skills', [])),
                 'github_username': getattr(user, 'github_username', None),
                 'leetcode_username': getattr(user, 'leetcode_username', None),
             } for user in users]

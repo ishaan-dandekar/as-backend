@@ -6,9 +6,69 @@ from .models import Project
 from .serializers import ProjectSerializer
 from django.db.models import Q
 from apps.notifications.models import Notification
-from apps.teams.models import Team
+from apps.core.discovery import infer_project_domains
 
 User = get_user_model()
+
+
+def _normalized_tokens(values):
+    tokens = set()
+    for value in values or []:
+        normalized = str(value or '').strip().lower()
+        if normalized:
+            tokens.add(normalized)
+    return tokens
+
+
+def _normalize_github_repo_url(value):
+    return str(value or '').strip().rstrip('/').lower()
+
+
+def _find_existing_owned_project(user, payload):
+    github_url = _normalize_github_repo_url(
+        payload.get('github_url') or payload.get('githubUrl')
+    )
+    title = str(payload.get('title') or '').strip()
+    owned_projects = Project.objects.filter(owner=user).order_by('-updated_at')
+
+    if github_url:
+        for project in owned_projects.exclude(github_url__isnull=True).exclude(github_url=''):
+            if _normalize_github_repo_url(project.github_url) == github_url:
+                return project
+
+    if title:
+        fallback_project = owned_projects.filter(title__iexact=title).first()
+        if fallback_project:
+            return fallback_project
+
+    return None
+
+
+def _project_recommendation_score(user, project):
+    score = 0
+    user_skill_tokens = _normalized_tokens(getattr(user, 'skills', []))
+    project_skill_tokens = _normalized_tokens(getattr(project, 'tech_stack', []))
+
+    tech_overlap = len(user_skill_tokens.intersection(project_skill_tokens))
+    score += tech_overlap * 5
+
+    if getattr(user, 'branch', None) and getattr(project.owner, 'branch', None) and user.branch == project.owner.branch:
+        score += 3
+
+    if getattr(user, 'year', None) and getattr(project.owner, 'year', None) and user.year == project.owner.year:
+        score += 2
+
+    if (project.team_capacity or 0) > (project.team_member_count or 0):
+        score += 4
+    elif project.status == 'LOOKING_FOR_TEAMMATES':
+        score += 2
+
+    if project.status == 'ACTIVE':
+        score += 2
+    elif project.status == 'LOOKING_FOR_TEAMMATES':
+        score += 3
+
+    return score
 
 
 class ProjectCreateListView(APIView):
@@ -17,10 +77,14 @@ class ProjectCreateListView(APIView):
         query = request.query_params.get('search', '')
         status_filter = request.query_params.get('status', '')
         tech_stack = request.query_params.get('techStack', '')
+        domains = request.query_params.getlist('domains') or request.query_params.getlist('domain')
+        if not domains:
+            raw_domains = request.query_params.get('domains', '') or request.query_params.get('domain', '')
+            domains = [item.strip() for item in str(raw_domains).split(',') if item.strip()]
         page = int(request.query_params.get('page', 1))
         limit = int(request.query_params.get('limit', 10))
 
-        projects = Project.objects.all()
+        projects = Project.objects.select_related('owner').all()
 
         if query:
             projects = projects.filter(Q(title__icontains=query) | Q(description__icontains=query))
@@ -31,7 +95,21 @@ class ProjectCreateListView(APIView):
             for tech in tech_list:
                 projects = projects.filter(tech_stack__contains=tech)
 
-        total = projects.count()
+        if domains:
+            requested_domains = {str(item).strip().lower() for item in domains if str(item).strip()}
+            filtered_projects = []
+            for project in projects:
+                project_domains = {
+                    tag.lower()
+                    for tag in infer_project_domains(project.title, project.description, project.tech_stack)
+                }
+                if project_domains.intersection(requested_domains):
+                    filtered_projects.append(project)
+            projects = filtered_projects
+        else:
+            projects = list(projects)
+
+        total = len(projects)
         start = (page - 1) * limit
         end = start + limit
         projects = projects[start:end]
@@ -55,8 +133,15 @@ class ProjectCreateListView(APIView):
 
         try:
             user = User.objects.get(id=request.user_id)
-            serializer = ProjectSerializer(data=request.data)
+            existing_project = _find_existing_owned_project(user, request.data)
+            if existing_project:
+                serializer = ProjectSerializer(existing_project, data=request.data, partial=True)
+                if serializer.is_valid():
+                    project = serializer.save()
+                    return Response({'success': True, 'data': ProjectSerializer(project, context={'request': request}).data})
+                return Response({'success': False, 'message': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
+            serializer = ProjectSerializer(data=request.data)
             if serializer.is_valid():
                 project = serializer.save(owner=user)
                 return Response({'success': True, 'data': ProjectSerializer(project, context={'request': request}).data}, status=status.HTTP_201_CREATED)
@@ -158,6 +243,46 @@ class PublicUserProjectsView(APIView):
             projects = projects.filter(status=status_filter)
 
         serializer = ProjectSerializer(projects, many=True, context={'request': request})
+        return Response({'success': True, 'data': serializer.data})
+
+
+class RecommendedProjectsView(APIView):
+    def get(self, request):
+        """Return backend-ranked project recommendations for the authenticated user."""
+        if not hasattr(request, 'user_id'):
+            return Response({'success': False, 'message': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        try:
+            user = User.objects.get(id=request.user_id)
+        except User.DoesNotExist:
+            return Response({'success': False, 'message': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        projects = (
+            Project.objects.select_related('owner')
+            .exclude(owner_id=request.user_id)
+            .exclude(owner__role__in=['DEPARTMENT', 'ADMIN'])
+            .exclude(status='COMPLETED')
+        )
+
+        ranked = []
+        for project in projects:
+            score = _project_recommendation_score(user, project)
+            updated_ts = project.updated_at.timestamp() if project.updated_at else 0
+            ranked.append({
+                'project': project,
+                'score': score,
+                'updated_ts': updated_ts,
+            })
+
+        ranked.sort(key=lambda item: (item['score'], item['updated_ts']), reverse=True)
+
+        positive_matches = [item['project'] for item in ranked if item['score'] > 0]
+        if positive_matches:
+            selected_projects = positive_matches[:8]
+        else:
+            selected_projects = [item['project'] for item in ranked[:8]]
+
+        serializer = ProjectSerializer(selected_projects, many=True, context={'request': request})
         return Response({'success': True, 'data': serializer.data})
 
 

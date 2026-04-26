@@ -21,6 +21,19 @@ STATE_SALT = 'google-oauth-state'
 STATE_MAX_AGE_SECONDS = 600
 
 
+def _infer_user_role_from_email(email: str) -> str:
+    local_part = (email.split('@')[0] if '@' in email else '').strip().lower()
+    is_likely_student = (
+        local_part.replace('.', '').replace('_', '').replace('-', '').isdigit()
+        or any(c.isdigit() for c in local_part)
+    )
+    return 'STUDENT' if is_likely_student else 'DEPARTMENT'
+
+
+def _derive_login_identifier(email: str) -> str:
+    return User.derive_login_identifier(email, email, fallback=email.split('@')[0] if '@' in email else email)
+
+
 class GoogleOAuthStartView(APIView):
     """Returns the Google OAuth authorization URL for the frontend to open."""
     authentication_classes = []
@@ -176,13 +189,22 @@ class GoogleOAuthCallbackView(APIView):
             )
 
         # Find or create user
+        inferred_role = _infer_user_role_from_email(email)
+
         try:
             user = User.objects.get(email__iexact=email)
             # Update profile info from Google on each login
             updated_fields = []
+            desired_username = _derive_login_identifier(email)
+            if desired_username and user.username != desired_username:
+                user.username = desired_username
+                updated_fields.append('username')
             if name and user.first_name != name:
                 user.first_name = name
                 updated_fields.append('first_name')
+            if getattr(user, 'role', None) != inferred_role:
+                user.role = inferred_role
+                updated_fields.append('role')
             if updated_fields:
                 user.save(update_fields=updated_fields)
             if picture and get_user_profile_picture_url(user) != picture:
@@ -190,9 +212,10 @@ class GoogleOAuthCallbackView(APIView):
         except User.DoesNotExist:
             # Create new user
             user = User.objects.create_user(
-                username=email,
+                username=_derive_login_identifier(email),
                 email=email,
                 first_name=name,
+                role=inferred_role,
                 password=None,  # No password needed for Google OAuth
             )
             if picture:
@@ -201,12 +224,7 @@ class GoogleOAuthCallbackView(APIView):
         # Generate JWT tokens
         access_jwt, refresh_jwt = generate_tokens(str(user.id))
 
-        # Auto-detect role from email prefix
         local_part = email.split('@')[0]
-        is_likely_student = local_part.replace('.', '').replace('_', '').replace('-', '').isdigit() or any(
-            c.isdigit() for c in local_part
-        )
-        role = 'STUDENT' if is_likely_student else 'DEPARTMENT'
 
         payload = {
             'user': {
@@ -214,10 +232,11 @@ class GoogleOAuthCallbackView(APIView):
                 'email': user.email,
                 'name': user.first_name or local_part,
                 'profile_picture_url': get_user_profile_picture_url(user) or picture,
+                'role': user.role,
             },
             'token': access_jwt,
             'refreshToken': refresh_jwt,
-            'role': role,
+            'role': user.role,
         }
 
         return self._redirect_result('success', 'Signed in successfully!', frontend_origin, payload)

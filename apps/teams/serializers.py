@@ -61,7 +61,7 @@ class TeamMemberSerializer(serializers.ModelSerializer):
 
 class TeamSerializer(serializers.ModelSerializer):
     members = serializers.SerializerMethodField()
-    owner_id = serializers.UUIDField(source='owner.id', read_only=True)
+    owner_id = serializers.CharField(source='owner.id', read_only=True)
     search_keywords = serializers.SerializerMethodField()
     project = serializers.SerializerMethodField()
 
