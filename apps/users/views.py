@@ -7,26 +7,83 @@ import requests
 from django.conf import settings
 from django.core.cache import cache
 from django.core import signing
-from django.db.models import Q
+from django.db.models import Count, Q
 from urllib.parse import urlencode, urlparse
 import uuid
 import json
 from .models import get_user_profile_picture_url
 from apps.core.discovery import normalize_skill_tag, normalize_tags
+from apps.core.student_utils import calculate_academic_status, derive_student_details_from_uid
 
 User = get_user_model()
 GITHUB_OAUTH_STATE_SALT = 'project-hub-github-oauth-state'
 GITHUB_OAUTH_SESSION_PREFIX = 'github_oauth_session:'
 GITHUB_OAUTH_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
-VALID_BRANCHES = {choice[0] for choice in getattr(User, 'BRANCH_CHOICES', [])}
-VALID_YEARS = {choice[0] for choice in getattr(User, 'YEAR_CHOICES', [])}
-
-
 def _normalized_user_role(user):
     role = (getattr(user, 'role', '') or '').upper()
     if role in {'DEPARTMENT', 'ADMIN'}:
-        return 'DEPARTMENT'
+        return 'ADMIN'
     return 'STUDENT'
+
+
+def _hydrate_student_academic_fields(user):
+    details = derive_student_details_from_uid(str(user.id))
+    persisted_updates = []
+
+    if details:
+        derived_admission_year = details.get('admission_year')
+        derived_department = details.get('department')
+
+        if derived_admission_year and getattr(user, 'admission_year', None) != derived_admission_year:
+            user.admission_year = derived_admission_year
+            persisted_updates.append('admission_year')
+
+        if derived_department and getattr(user, 'branch', None) != derived_department:
+            user.branch = derived_department
+            persisted_updates.append('branch')
+
+        if persisted_updates:
+            user.save(update_fields=persisted_updates)
+
+        return {
+            'department': derived_department or getattr(user, 'branch', None),
+            'admission_year': derived_admission_year or getattr(user, 'admission_year', None),
+            'academic_status': calculate_academic_status(
+                derived_admission_year or getattr(user, 'admission_year', None)
+            ) or getattr(user, 'academic_year', None),
+        }
+
+    return {
+        'department': getattr(user, 'branch', None),
+        'admission_year': getattr(user, 'admission_year', None),
+        'academic_status': getattr(user, 'academic_year', None),
+    }
+
+
+def _project_count_map_for_user_ids(user_ids):
+    normalized_user_ids = [str(user_id).strip() for user_id in user_ids if str(user_id).strip()]
+    if not normalized_user_ids:
+        return {}
+
+    from apps.projects.models import Project
+
+    counts = (
+        Project.objects
+        .filter(owner_id__in=normalized_user_ids)
+        .values('owner_id')
+        .annotate(
+            projects_count=Count('id'),
+            active_projects_count=Count('id', filter=Q(status='ACTIVE')),
+        )
+    )
+
+    return {
+        str(item['owner_id']): {
+            'projects_count': int(item.get('projects_count') or 0),
+            'active_projects_count': int(item.get('active_projects_count') or 0),
+        }
+        for item in counts
+    }
 
 
 def _build_github_stats_payload(profile_data, repos_data):
@@ -106,8 +163,15 @@ def _delete_cached_session(session_id):
     cache.delete(f'{GITHUB_OAUTH_SESSION_PREFIX}{session_id}')
 
 
-def _safe_user_payload(user):
+def _safe_user_payload(user, project_counts=None):
     moodle_id = str(user.id)
+    academic_details = _hydrate_student_academic_fields(user)
+    project_count_values = (project_counts or {}).get(moodle_id)
+    if project_count_values is None:
+        project_count_values = _project_count_map_for_user_ids([moodle_id]).get(
+            moodle_id,
+            {'projects_count': 0, 'active_projects_count': 0},
+        )
 
     teams_joined_value = getattr(user, 'teams_joined', None)
     if hasattr(teams_joined_value, 'count'):
@@ -126,6 +190,7 @@ def _safe_user_payload(user):
 
     return {
         'id': str(user.id),
+        'uid': moodle_id,
         'moodle_id': moodle_id,
         'unique_id': moodle_id,
         'username': user.username,
@@ -134,8 +199,11 @@ def _safe_user_payload(user):
         'name': getattr(user, 'first_name', '') or user.username,
         'profile_picture_url': get_user_profile_picture_url(user),
         'bio': getattr(user, 'bio', ''),
-        'branch': getattr(user, 'branch', None),
-        'year': getattr(user, 'year', None),
+        'branch': academic_details.get('department'),
+        'department': academic_details.get('department'),
+        'admission_year': academic_details.get('admission_year'),
+        'year': academic_details.get('academic_status'),
+        'academic_status': academic_details.get('academic_status'),
         'github_username': github_username_value,
         'leetcode_username': getattr(user, 'leetcode_username', None),
         'skills': skill_tags,
@@ -143,6 +211,8 @@ def _safe_user_payload(user):
         'interests': getattr(user, 'interests', []),
         'projects_created': getattr(user, 'projects_created', 0),
         'projects_completed': getattr(user, 'projects_completed', 0),
+        'projects_count': project_count_values.get('projects_count', 0),
+        'active_projects_count': project_count_values.get('active_projects_count', 0),
         'teams_joined': teams_joined_value,
     }
 
@@ -179,9 +249,10 @@ class UserProfileView(APIView):
 
         try:
             user = User.objects.get(id=request.user_id)
+            project_counts = _project_count_map_for_user_ids([user.id])
             return Response({
                 'success': True,
-                'data': _safe_user_payload(user)
+                'data': _safe_user_payload(user, project_counts)
             })
         except User.DoesNotExist:
             return Response({'success': False, 'message': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -214,42 +285,19 @@ class UserProfileView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            branch = request.data.get('branch') if 'branch' in request.data else None
-            year = request.data.get('year') if 'year' in request.data else None
-
-            if _normalized_user_role(user) != 'STUDENT':
-                if 'branch' in request.data or 'year' in request.data:
-                    return Response(
-                        {
-                            'success': False,
-                            'message': 'Only student profiles can set branch and year.',
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-            else:
-                if 'branch' in request.data:
-                    normalized_branch = str(branch or '').strip()
-                    if normalized_branch and normalized_branch not in VALID_BRANCHES:
-                        return Response(
-                            {
-                                'success': False,
-                                'message': f"branch must be one of: {', '.join(sorted(VALID_BRANCHES))}",
-                            },
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    user.branch = normalized_branch or None
-
-                if 'year' in request.data:
-                    normalized_year = str(year or '').strip().upper()
-                    if normalized_year and normalized_year not in VALID_YEARS:
-                        return Response(
-                            {
-                                'success': False,
-                                'message': f"year must be one of: {', '.join(sorted(VALID_YEARS))}",
-                            },
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    user.year = normalized_year or None
+            derived_fields = {'uid', 'moodle_id', 'unique_id', 'branch', 'department', 'admission_year', 'year', 'academic_status'}
+            attempted_derived_fields = sorted(field for field in derived_fields if field in request.data)
+            if attempted_derived_fields:
+                return Response(
+                    {
+                        'success': False,
+                        'message': (
+                            'These academic fields are derived from the APSIT UID during sign-in and cannot be edited manually: '
+                            + ', '.join(attempted_derived_fields)
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
             # Update allowed fields
             for field in ['bio', 'github_url', 'linkedin_url', 'interests', 'github_username', 'leetcode_username']:
@@ -284,9 +332,10 @@ class UserDetailView(APIView):
         if not user:
             return Response({'success': False, 'message': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
 
+        project_counts = _project_count_map_for_user_ids([user.id])
         return Response({
             'success': True,
-            'data': _safe_user_payload(user)
+            'data': _safe_user_payload(user, project_counts)
         })
 
 
@@ -714,7 +763,6 @@ class UserSearchView(APIView):
                 | Q(first_name__icontains=query)
                 | Q(last_name__icontains=query)
                 | Q(branch__icontains=query)
-                | Q(year__icontains=query)
                 | Q(github_username__icontains=query)
                 | Q(leetcode_username__icontains=query)
             )
@@ -738,6 +786,9 @@ class UserSearchView(APIView):
                 or normalized_query in f"{(user.first_name or '').strip()} {(user.last_name or '').strip()}".lower()
                 or normalized_query in (user.username or '').lower()
                 or normalized_query in (user.email or '').lower()
+                or normalized_query in str(getattr(user, 'admission_year', '') or '').lower()
+                or normalized_query in (getattr(user, 'branch', '') or '').lower()
+                or normalized_query in (getattr(user, 'academic_year', '') or '').lower()
                 or normalized_query in (getattr(user, 'github_username', '') or '').lower()
                 or normalized_query in (getattr(user, 'leetcode_username', '') or '').lower()
                 or any(
@@ -747,10 +798,16 @@ class UserSearchView(APIView):
             ]
 
         users = users[:limit]
+        project_counts = _project_count_map_for_user_ids([user.id for user in users])
+        academic_details_by_user_id = {
+            str(user.id): _hydrate_student_academic_fields(user)
+            for user in users
+        }
         return Response({
             'success': True,
             'data': [{
                 'id': str(user.id),
+                'uid': _derive_moodle_id(user),
                 'moodle_id': _derive_moodle_id(user),
                 'unique_id': _derive_moodle_id(user),
                 'username': user.username,
@@ -758,11 +815,16 @@ class UserSearchView(APIView):
                 'first_name': user.first_name,
                 'last_name': user.last_name,
                 'profile_picture_url': get_user_profile_picture_url(user),
-                'branch': getattr(user, 'branch', None),
-                'year': getattr(user, 'year', None),
+                'branch': academic_details_by_user_id.get(str(user.id), {}).get('department'),
+                'department': academic_details_by_user_id.get(str(user.id), {}).get('department'),
+                'admission_year': academic_details_by_user_id.get(str(user.id), {}).get('admission_year'),
+                'year': academic_details_by_user_id.get(str(user.id), {}).get('academic_status'),
+                'academic_status': academic_details_by_user_id.get(str(user.id), {}).get('academic_status'),
                 'skills': normalize_tags(getattr(user, 'skills', [])),
                 'skill_tags': normalize_tags(getattr(user, 'skills', [])),
                 'github_username': getattr(user, 'github_username', None),
                 'leetcode_username': getattr(user, 'leetcode_username', None),
+                'projects_count': project_counts.get(str(user.id), {}).get('projects_count', 0),
+                'active_projects_count': project_counts.get(str(user.id), {}).get('active_projects_count', 0),
             } for user in users]
         })

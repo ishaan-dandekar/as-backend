@@ -1,16 +1,18 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from .student_utils import calculate_academic_status
 
 
 class User(AbstractUser):
     """Custom User model extending Django's AbstractUser"""
     BRANCH_CHOICES = [
-        ('CE', 'CE'),
-        ('IT', 'IT'),
-        ('AI-ML', 'AI-ML'),
-        ('DS', 'DS'),
         ('Civil', 'Civil'),
+        ('Computer Engineering', 'Computer Engineering'),
+        ('EXTC (Discontinued)', 'EXTC (Discontinued)'),
+        ('IT', 'IT'),
         ('Mechanical', 'Mechanical'),
+        ('AIML', 'AIML'),
+        ('Data Science', 'Data Science'),
     ]
 
     YEAR_CHOICES = [
@@ -22,7 +24,7 @@ class User(AbstractUser):
 
     USER_ROLE_CHOICES = [
         ('STUDENT', 'Student'),
-        ('DEPARTMENT', 'Department'),
+        ('ADMIN', 'Admin'),
     ]
 
     id = models.CharField(max_length=32, primary_key=True, editable=False)
@@ -31,8 +33,9 @@ class User(AbstractUser):
     bio = models.TextField(blank=True, null=True)
     github_url = models.URLField(blank=True, null=True)
     linkedin_url = models.URLField(blank=True, null=True)
-    branch = models.CharField(max_length=20, choices=BRANCH_CHOICES, blank=True, null=True)
-    year = models.CharField(max_length=2, choices=YEAR_CHOICES, blank=True, null=True)
+    branch = models.CharField(max_length=32, choices=BRANCH_CHOICES, blank=True, null=True)
+    admission_year = models.IntegerField(blank=True, null=True)
+    year = models.CharField(max_length=10, blank=True, null=True) # Will calculate dynamically, keeping field if needed but unused for storage of FE/SE
     skills = models.JSONField(default=list, blank=True)
     interests = models.JSONField(default=list, blank=True)
     github_username = models.CharField(max_length=100, blank=True, null=True)
@@ -87,6 +90,21 @@ class User(AbstractUser):
     @classmethod
     def derive_login_identifier(cls, username, email, fallback=''):
         return cls.derive_moodle_id(username, email, fallback=fallback)
+
+    @property
+    def academic_year(self):
+        dynamic_year = calculate_academic_status(self.admission_year)
+        if dynamic_year:
+            return dynamic_year
+        return self.year
+
+    @property
+    def uid(self):
+        return str(self.id)
+
+    @property
+    def department(self):
+        return self.branch
 
     def save(self, *args, **kwargs):
         canonical_id = self.derive_moodle_id(self.username, self.email, fallback=str(self.id or ''))

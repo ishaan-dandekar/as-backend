@@ -4,6 +4,7 @@ from unittest import TestLoader, TestSuite
 
 
 TEST_MODULES = [
+    'apps.auth.tests',
     'apps.users.tests',
     'apps.projects.tests',
 ]

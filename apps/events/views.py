@@ -18,10 +18,10 @@ def _get_authenticated_user(request):
         return None, Response({'success': False, 'message': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
 
 
-def _ensure_department_user(user):
+def _ensure_admin_user(user):
     if getattr(user, 'role', '').upper() not in {'DEPARTMENT', 'ADMIN'}:
         return Response(
-            {'success': False, 'message': 'Only department users can manage events'},
+            {'success': False, 'message': 'Only admin users can manage events'},
             status=status.HTTP_403_FORBIDDEN,
         )
     return None
@@ -62,7 +62,7 @@ class EventCreateListView(APIView):
         if error_response:
             return error_response
 
-        role_error = _ensure_department_user(user)
+        role_error = _ensure_admin_user(user)
         if role_error:
             return role_error
 
@@ -91,7 +91,7 @@ class EventDetailView(APIView):
         if error_response:
             return error_response
 
-        role_error = _ensure_department_user(user)
+        role_error = _ensure_admin_user(user)
         if role_error:
             return role_error
 
@@ -114,7 +114,7 @@ class EventDetailView(APIView):
         if error_response:
             return error_response
 
-        role_error = _ensure_department_user(user)
+        role_error = _ensure_admin_user(user)
         if role_error:
             return role_error
 

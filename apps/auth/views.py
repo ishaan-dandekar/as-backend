@@ -6,6 +6,7 @@ from django.http import HttpResponse, HttpResponseRedirect
 from django.conf import settings
 from django.core import signing
 from apps.core.authentication import generate_tokens
+from apps.core.student_utils import derive_student_details_from_uid
 from apps.users.models import get_user_profile_picture_url, set_user_profile_picture_url
 from urllib.parse import urlencode
 from urllib.parse import urlparse
@@ -27,8 +28,7 @@ def _infer_user_role_from_email(email: str) -> str:
         local_part.replace('.', '').replace('_', '').replace('-', '').isdigit()
         or any(c.isdigit() for c in local_part)
     )
-    return 'STUDENT' if is_likely_student else 'DEPARTMENT'
-
+    return 'STUDENT' if is_likely_student else 'ADMIN'
 
 def _derive_login_identifier(email: str) -> str:
     return User.derive_login_identifier(email, email, fallback=email.split('@')[0] if '@' in email else email)
@@ -190,6 +190,10 @@ class GoogleOAuthCallbackView(APIView):
 
         # Find or create user
         inferred_role = _infer_user_role_from_email(email)
+        local_part = email.split('@')[0] if '@' in email else email
+        student_details = derive_student_details_from_uid(local_part) if inferred_role == 'STUDENT' else None
+        admission_year = student_details['admission_year'] if student_details else None
+        department = student_details['department'] if student_details else None
 
         try:
             user = User.objects.get(email__iexact=email)
@@ -202,7 +206,14 @@ class GoogleOAuthCallbackView(APIView):
             if name and user.first_name != name:
                 user.first_name = name
                 updated_fields.append('first_name')
-            if getattr(user, 'role', None) != inferred_role:
+            if admission_year and user.admission_year != admission_year:
+                user.admission_year = admission_year
+                updated_fields.append('admission_year')
+            if department and user.branch != department:
+                user.branch = department
+                updated_fields.append('branch')
+            # Do not overwrite role with inferred_role if it's already set to a higher privilege
+            if getattr(user, 'role', None) in [None, ''] or (getattr(user, 'role') == 'STUDENT' and inferred_role == 'ADMIN'):
                 user.role = inferred_role
                 updated_fields.append('role')
             if updated_fields:
@@ -216,6 +227,8 @@ class GoogleOAuthCallbackView(APIView):
                 email=email,
                 first_name=name,
                 role=inferred_role,
+                admission_year=admission_year,
+                branch=department,
                 password=None,  # No password needed for Google OAuth
             )
             if picture:
@@ -233,6 +246,11 @@ class GoogleOAuthCallbackView(APIView):
                 'name': user.first_name or local_part,
                 'profile_picture_url': get_user_profile_picture_url(user) or picture,
                 'role': user.role,
+                'uid': str(user.id),
+                'admission_year': user.admission_year,
+                'department': user.branch,
+                'year': user.academic_year,
+                'academic_status': user.academic_year,
             },
             'token': access_jwt,
             'refreshToken': refresh_jwt,

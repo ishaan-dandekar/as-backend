@@ -1,5 +1,8 @@
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
+from unittest.mock import patch
+from datetime import datetime
+from django.utils import timezone
 
 from apps.core.authentication import generate_tokens
 
@@ -12,27 +15,27 @@ User = get_user_model()
 class RecommendedProjectsViewTests(APITestCase):
     def setUp(self):
         self.student = User.objects.create_user(
-            username='student2',
-            email='student2@apsit.edu.in',
+            username='24102115',
+            email='24102115@apsit.edu.in',
             password='testpass123',
             role='STUDENT',
-            branch='CE',
-            year='TE',
+            branch='Computer Engineering',
+            admission_year=2024,
             skills=['python', 'django'],
         )
         self.matching_owner = User.objects.create_user(
-            username='owner1',
-            email='owner1@apsit.edu.in',
+            username='24102215',
+            email='24102215@apsit.edu.in',
             password='testpass123',
             role='STUDENT',
-            branch='CE',
-            year='TE',
+            branch='Computer Engineering',
+            admission_year=2024,
         )
-        self.department_owner = User.objects.create_user(
+        self.admin_owner = User.objects.create_user(
             username='dept1',
             email='dept1@apsit.edu.in',
             password='testpass123',
-            role='DEPARTMENT',
+            role='ADMIN',
         )
 
         self.best_project = Project.objects.create(
@@ -53,11 +56,11 @@ class RecommendedProjectsViewTests(APITestCase):
             team_member_count=2,
             team_capacity=2,
         )
-        self.department_project = Project.objects.create(
-            title='Department Project',
-            description='Should be excluded',
+        self.admin_project = Project.objects.create(
+            title='Admin Project',
+            description='Should still be recommended like any other user project',
             tech_stack=['python'],
-            owner=self.department_owner,
+            owner=self.admin_owner,
             status='ACTIVE',
             team_member_count=1,
             team_capacity=3,
@@ -66,12 +69,15 @@ class RecommendedProjectsViewTests(APITestCase):
         access_token, _ = generate_tokens(str(self.student.id))
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
 
-    def test_recommendations_rank_matching_projects_and_exclude_department(self):
+    @patch('apps.core.student_utils.timezone.now')
+    def test_recommendations_rank_matching_projects_and_include_admin_projects(self, mock_now):
+        mock_now.return_value = timezone.make_aware(datetime(2026, 7, 10, 12, 0, 0))
+
         response = self.client.get('/api/projects/recommended/')
 
         self.assertEqual(response.status_code, 200)
         returned_ids = [item['id'] for item in response.data['data']]
         self.assertIn(str(self.best_project.id), returned_ids)
         self.assertIn(str(self.weaker_project.id), returned_ids)
-        self.assertNotIn(str(self.department_project.id), returned_ids)
+        self.assertIn(str(self.admin_project.id), returned_ids)
         self.assertEqual(returned_ids[0], str(self.best_project.id))

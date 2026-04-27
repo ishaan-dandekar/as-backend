@@ -55,7 +55,7 @@ def _project_recommendation_score(user, project):
     if getattr(user, 'branch', None) and getattr(project.owner, 'branch', None) and user.branch == project.owner.branch:
         score += 3
 
-    if getattr(user, 'year', None) and getattr(project.owner, 'year', None) and user.year == project.owner.year:
+    if getattr(user, 'academic_year', None) and getattr(project.owner, 'academic_year', None) and user.academic_year == project.owner.academic_year:
         score += 2
 
     if (project.team_capacity or 0) > (project.team_member_count or 0):
@@ -260,7 +260,6 @@ class RecommendedProjectsView(APIView):
         projects = (
             Project.objects.select_related('owner')
             .exclude(owner_id=request.user_id)
-            .exclude(owner__role__in=['DEPARTMENT', 'ADMIN'])
             .exclude(status='COMPLETED')
         )
 
