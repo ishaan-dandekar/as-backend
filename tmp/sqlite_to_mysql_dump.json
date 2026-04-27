@@ -1,0 +1,167 @@
+[
+{
+  "model": "core.user",
+  "fields": {
+    "password": "!qZ5OzoLjtdC35Cg4VjlwtEiJXazVhFdR19GLbEmm",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "24102115@apsit.edu.in",
+    "first_name": "JAMIL KHAN",
+    "last_name": "",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-04-25T18:23:21.207Z",
+    "email": "24102115@apsit.edu.in",
+    "profile_picture_url": "https://lh3.googleusercontent.com/a/ACg8ocIeM5v1wafVnj8JJ8p2gokFrgMGhROIg7vzN-HhgZQpbGtoBA=s96-c",
+    "bio": "",
+    "github_url": null,
+    "linkedin_url": null,
+    "branch": null,
+    "year": null,
+    "skills": [
+      "Django",
+      "FastAPI",
+      "Python",
+      "Machine Learning",
+      "AWS",
+      "Redis"
+    ],
+    "interests": [],
+    "github_username": "Viverun",
+    "leetcode_username": "JellyOS",
+    "projects_created": 0,
+    "projects_completed": 0,
+    "teams_joined_count": 0,
+    "role": "STUDENT",
+    "is_active_custom": true,
+    "created_at": "2026-04-25T18:23:21.208Z",
+    "updated_at": "2026-04-25T18:50:11.698Z",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "projects.project",
+  "pk": "15650b1d-2c6c-4e7d-adb2-fa62ec686776",
+  "fields": {
+    "title": "Sentinel-Fraud-Detection",
+    "description": "Repository synced from GitHub (Viverun/Sentinel-Fraud-Detection).",
+    "thumbnail_url": null,
+    "images": [],
+    "tech_stack": [
+      "Jupyter Notebook"
+    ],
+    "owner": [
+      "24102115@apsit.edu.in"
+    ],
+    "status": "ACTIVE",
+    "team": null,
+    "team_member_count": 0,
+    "team_capacity": 5,
+    "github_url": "https://github.com/Viverun/Sentinel-Fraud-Detection",
+    "live_url": null,
+    "bookmarked_by": [],
+    "created_at": "2026-04-25T18:53:54.202Z",
+    "updated_at": "2026-04-25T18:53:54.202Z"
+  }
+},
+{
+  "model": "projects.project",
+  "pk": "68f8d1ef-cace-4c91-aaee-f8fe45fcbe6b",
+  "fields": {
+    "title": "jits-data-pipeline",
+    "description": "Deterministic, schema-first data pipeline for structuring Indian court judgments with statutory transition and explainable similarity analysis.",
+    "thumbnail_url": null,
+    "images": [],
+    "tech_stack": [
+      "Python"
+    ],
+    "owner": [
+      "24102115@apsit.edu.in"
+    ],
+    "status": "ACTIVE",
+    "team": null,
+    "team_member_count": 0,
+    "team_capacity": 5,
+    "github_url": "https://github.com/Viverun/jits-data-pipeline",
+    "live_url": null,
+    "bookmarked_by": [],
+    "created_at": "2026-04-25T18:53:44.064Z",
+    "updated_at": "2026-04-25T18:53:44.064Z"
+  }
+},
+{
+  "model": "projects.project",
+  "pk": "722f375b-4f9f-49b6-8e31-93e1c591f362",
+  "fields": {
+    "title": "Differential-Cosmology",
+    "description": "Given what the universe looks like now, what did it look like at the beginning?",
+    "thumbnail_url": null,
+    "images": [],
+    "tech_stack": [
+      "CSS"
+    ],
+    "owner": [
+      "24102115@apsit.edu.in"
+    ],
+    "status": "ACTIVE",
+    "team": null,
+    "team_member_count": 0,
+    "team_capacity": 5,
+    "github_url": "https://github.com/Viverun/Differential-Cosmology",
+    "live_url": null,
+    "bookmarked_by": [],
+    "created_at": "2026-04-25T18:54:04.535Z",
+    "updated_at": "2026-04-25T18:54:04.535Z"
+  }
+},
+{
+  "model": "projects.project",
+  "pk": "e246f7e6-2240-4479-a846-128de4903e74",
+  "fields": {
+    "title": "Hidden-Vertex",
+    "description": "Unsupervised Anomaly Detection for Long-Lived Particles using Graph Autoencoders",
+    "thumbnail_url": null,
+    "images": [],
+    "tech_stack": [
+      "Jupyter Notebook"
+    ],
+    "owner": [
+      "24102115@apsit.edu.in"
+    ],
+    "status": "ACTIVE",
+    "team": null,
+    "team_member_count": 0,
+    "team_capacity": 5,
+    "github_url": "https://github.com/Viverun/Hidden-Vertex",
+    "live_url": null,
+    "bookmarked_by": [],
+    "created_at": "2026-04-25T18:53:50.476Z",
+    "updated_at": "2026-04-25T18:53:50.476Z"
+  }
+},
+{
+  "model": "teams.team",
+  "pk": "03d8e201-4ae3-4c5f-aadf-d4865d25af47",
+  "fields": {
+    "name": "CodeCrushers",
+    "description": "We crush other teams using AI",
+    "owner": [
+      "24102115@apsit.edu.in"
+    ],
+    "member_count": 1,
+    "capacity": 5,
+    "member_roles": {
+      "49f687b9-7d1b-4af0-aa73-547f10c25a2b": "OWNER"
+    },
+    "is_active": true,
+    "created_at": "2026-04-25T19:00:19.850Z",
+    "updated_at": "2026-04-25T19:00:19.888Z",
+    "members": [
+      [
+        "24102115@apsit.edu.in"
+      ]
+    ]
+  }
+}
+]
