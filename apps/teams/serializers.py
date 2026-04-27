@@ -31,6 +31,9 @@ class TeamMemberSerializer(serializers.ModelSerializer):
 
     def get_role(self, obj):
         member_roles = self.context.get('member_roles', {})
+        owner_id = str(self.context.get('owner_id') or '')
+        if owner_id and str(obj.id) == owner_id:
+            return 'OWNER'
         return member_roles.get(str(obj.id), 'MEMBER')
 
     def get_name(self, obj):
@@ -69,7 +72,10 @@ class TeamSerializer(serializers.ModelSerializer):
         serializer = TeamMemberSerializer(
             obj.members.all(),
             many=True,
-            context={'member_roles': obj.member_roles or {}},
+            context={
+                'member_roles': obj.member_roles or {},
+                'owner_id': str(obj.owner_id),
+            },
         )
         return serializer.data
 

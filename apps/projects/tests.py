@@ -5,8 +5,7 @@ from datetime import datetime
 from django.utils import timezone
 
 from apps.core.authentication import generate_tokens
-
-from .models import Project
+from apps.projects.models import Project
 
 
 User = get_user_model()
