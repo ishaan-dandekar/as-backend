@@ -7,6 +7,7 @@ from .serializers import ProjectSerializer
 from django.db.models import Q
 from apps.notifications.models import Notification
 from apps.core.discovery import infer_project_domains
+from apps.teams.models import Team
 
 User = get_user_model()
 

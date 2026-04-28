@@ -67,6 +67,7 @@ class TeamSerializer(serializers.ModelSerializer):
     owner_id = serializers.CharField(source='owner.id', read_only=True)
     search_keywords = serializers.SerializerMethodField()
     project = serializers.SerializerMethodField()
+    current_user_join_state = serializers.SerializerMethodField()
 
     def get_members(self, obj):
         serializer = TeamMemberSerializer(
@@ -86,9 +87,26 @@ class TeamSerializer(serializers.ModelSerializer):
         project = obj.projects.order_by('-updated_at').first()
         return str(project.id) if project else None
 
+    def get_current_user_join_state(self, obj):
+        request = self.context.get('request')
+        if not request or not hasattr(request, 'user_id'):
+            return 'IDLE'
+
+        current_user_id = str(request.user_id)
+        if str(obj.owner_id) == current_user_id:
+            return 'OWNER'
+
+        if obj.members.filter(id=current_user_id).exists():
+            return 'JOINED'
+
+        if JoinRequest.objects.filter(team=obj, user_id=current_user_id, status='PENDING').exists():
+            return 'REQUEST_PENDING'
+
+        return 'IDLE'
+
     class Meta:
         model = Team
-        fields = ['id', 'name', 'description', 'owner', 'owner_id', 'project', 'members', 'member_count', 'capacity', 'search_keywords', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'description', 'owner', 'owner_id', 'project', 'members', 'member_count', 'capacity', 'search_keywords', 'current_user_join_state', 'created_at', 'updated_at']
 
 
 class JoinRequestSerializer(serializers.ModelSerializer):

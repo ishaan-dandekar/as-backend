@@ -6,6 +6,13 @@ User = get_user_model()
 
 
 class Event(models.Model):
+    EVENT_TYPE_CHOICES = [
+        ('HACKATHON', 'Hackathon'),
+        ('WORKSHOP', 'Workshop'),
+        ('MEETUP', 'Meetup'),
+        ('OTHER', 'Other'),
+    ]
+
     EVENT_STATUS_CHOICES = [
         ('UPCOMING', 'Upcoming'),
         ('ONGOING', 'Ongoing'),
@@ -21,6 +28,7 @@ class Event(models.Model):
     start_date = models.DateTimeField()
     end_date = models.DateTimeField()
     organizer = models.ForeignKey(User, on_delete=models.CASCADE)
+    event_type = models.CharField(max_length=20, choices=EVENT_TYPE_CHOICES, default='OTHER')
     status = models.CharField(max_length=20, choices=EVENT_STATUS_CHOICES, default='UPCOMING')
     attendees = models.JSONField(default=list, blank=True)
     attendee_count = models.IntegerField(default=0)

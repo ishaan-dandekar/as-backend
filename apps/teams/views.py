@@ -10,6 +10,10 @@ from apps.core.discovery import extract_team_search_keywords
 User = get_user_model()
 
 
+def serialize_team(team_or_teams, request, many=False):
+    return TeamSerializer(team_or_teams, many=many, context={'request': request})
+
+
 class TeamCreateView(APIView):
     def get(self, request):
         """Get teams for authenticated user"""
@@ -26,7 +30,7 @@ class TeamCreateView(APIView):
                     or search_query in str(team.description or '').lower()
                     or search_query in str(team.name or '').lower()
                 ]
-            serializer = TeamSerializer(teams, many=True)
+            serializer = serialize_team(teams, request, many=True)
             return Response({'success': True, 'data': serializer.data})
         except (OperationalError, ProgrammingError):
             return Response({'success': True, 'data': []})
@@ -50,7 +54,7 @@ class TeamCreateView(APIView):
             team.member_roles[str(user.id)] = 'OWNER'
             team.save()
 
-            return Response({'success': True, 'data': TeamSerializer(team).data}, status=status.HTTP_201_CREATED)
+            return Response({'success': True, 'data': serialize_team(team, request).data}, status=status.HTTP_201_CREATED)
         except User.DoesNotExist:
             return Response({'success': False, 'message': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -71,7 +75,7 @@ class TeamDiscoverView(APIView):
                     or search_query in str(team.description or '').lower()
                     or search_query in str(team.name or '').lower()
                 ]
-            serializer = TeamSerializer(teams, many=True)
+            serializer = serialize_team(teams, request, many=True)
             return Response({'success': True, 'data': serializer.data})
         except (OperationalError, ProgrammingError):
             return Response({'success': True, 'data': []})
@@ -82,7 +86,7 @@ class TeamDetailView(APIView):
         """Get team details"""
         try:
             team = Team.objects.get(id=team_id)
-            return Response({'success': True, 'data': TeamSerializer(team).data})
+            return Response({'success': True, 'data': serialize_team(team, request).data})
         except Team.DoesNotExist:
             return Response({'success': False, 'message': 'Team not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -96,10 +100,10 @@ class TeamDetailView(APIView):
             if str(team.owner.id) != str(request.user_id):
                 return Response({'success': False, 'message': 'Only owner can update'}, status=status.HTTP_403_FORBIDDEN)
 
-            serializer = TeamSerializer(team, data=request.data, partial=True)
+            serializer = TeamSerializer(team, data=request.data, partial=True, context={'request': request})
             if serializer.is_valid():
                 team = serializer.save()
-                return Response({'success': True, 'data': TeamSerializer(team).data})
+                return Response({'success': True, 'data': serialize_team(team, request).data})
             return Response({'success': False, 'message': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
         except Team.DoesNotExist:
             return Response({'success': False, 'message': 'Team not found'}, status=status.HTTP_404_NOT_FOUND)
